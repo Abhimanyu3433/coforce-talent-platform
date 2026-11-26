@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data            # database persists here (generated on first start if missing)
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+      COFORCE_JWT_SECRET: ${COFORCE_JWT_SECRET:-change-me-in-docker-please-use-a-long-random-string}
+      COFORCE_NIGHTLY_AT: ${COFORCE_NIGHTLY_AT:-02:00}
+    restart: unless-stopped

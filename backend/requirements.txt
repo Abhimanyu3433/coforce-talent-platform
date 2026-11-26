@@ -1,0 +1,11 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+PyJWT>=2.8
+numpy>=1.26
+pandas>=2.2
+pytest>=8.0
+httpx>=0.27
+# Stage 4 — demand assistant (both optional: the app falls back to the built-in parser / graph runner)
+google-genai>=1.0
+langgraph>=0.2
