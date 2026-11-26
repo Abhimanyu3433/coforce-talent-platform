@@ -4,7 +4,9 @@ from .services import residency
 
 ADD_COLUMNS = {
     "users": {"password_hash": "TEXT", "last_login": "TEXT"},
-    "certifications": {"verified_by": "TEXT", "verified_on": "TEXT", "review_note": "TEXT", "created_on": "TEXT"},
+    "certifications": {"verified_by": "TEXT", "verified_on": "TEXT", "review_note": "TEXT", "created_on": "TEXT",
+                       "proof_file": "TEXT", "proof_name": "TEXT", "proof_kind": "TEXT", "proof_size": "INTEGER",
+                       "proof_uploaded_on": "TEXT", "proof_checks": "TEXT"},
     "employee_skills": {"updated_on": "TEXT"},
     "demands": {"last_matched_on": "TEXT", "last_matched_by": "TEXT", "match_stats": "TEXT", "source": "TEXT"},
     "training_batches": {"plan_id": "TEXT"},

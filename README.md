@@ -92,10 +92,10 @@ builds the Docker image.
 ## Roles
 | Role | Who | Can |
 |---|---|---|
-| employee | A1–A3 delivery staff | view own profile, add skills/tools, upload certifications, see upskilling recommendations and start learning |
+| employee | A1–A3 delivery staff | view own profile, add skills/tools (or pick them up from an uploaded resume), add certifications with proof, see upskilling recommendations and start learning |
 | lead | B1–B2 | + residency dashboard, talent explorer, every profile, raise demands (assistant or form) |
 | manager | C1+ | + recompute residency, approve releases (Stage 3) |
-| hr | HR / TA / RMG | + verify certifications, approve training plans and the over-provisioning factor |
+| hr | HR / TA / RMG | + verify certifications against the uploaded proof, approve training plans and the over-provisioning factor |
 
 ## Residency rules
 - Stints on the same project/account separated by ≤ 30 days are continuous.
@@ -195,7 +195,10 @@ compute and is refreshed with *Recompute*.
 | GET | `/api/employees?skills=pyspark,databricks&min_proficiency=3&status=bench` | lead/manager/hr |
 | GET | `/api/employees/{emp_id}` | self or lead/manager/hr |
 | GET/POST/DELETE | `/api/me/profile` · `/api/me/skills` · `/api/me/certifications` | self |
-| GET / POST | `/api/certifications?status=pending` · `/api/certifications/{id}/review` | hr |
+| POST | `/api/me/resume/parse` (PDF/DOCX → suggested skills, nothing saved) · `/api/me/resume/apply` | self |
+| POST | `/api/me/certifications/{id}/proof` (attach / replace proof; a rejected certificate goes back to pending) | self |
+| GET | `/api/certifications/{id}/proof` (the file; stored under `data/uploads/`) | owner, hr |
+| GET / POST | `/api/certifications?status=pending` · `/api/certifications/{id}/review` (verify needs proof; reject needs a note) | hr |
 | GET | `/api/skills/search?q=` · `/api/skills/normalize?text=` · `/api/meta` · `/api/projects?account_id=` | all |
 | GET / POST | `/api/demands` · `/api/demands/supply-check` · `/api/demands/{id}` · PATCH `/api/demands/{id}/status` | lead/manager/hr |
 | POST / GET | `/api/demands/{id}/match` · `/api/demands/{id}/matches` · POST `/api/demands/{id}/matches/{emp}/action` | lead/manager/hr |

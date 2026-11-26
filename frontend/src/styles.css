@@ -274,3 +274,26 @@ tr.explain .bar-row { grid-template-columns: 190px 1fr 64px; }
 .pdf-icon { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: #fff; color: var(--red); margin-right: 4px; }
 .attachment details summary { cursor: pointer; color: #dbe4ff; }
 .attachment .extracted { margin-top: 6px; max-height: 260px; overflow-y: auto; background: rgba(255,255,255,.12); border-radius: 6px; padding: 6px 8px; font-size: 12px; white-space: normal; }
+
+/* ---------- resume upload & certificate proof */
+.review { flex-wrap: wrap; }
+.review .error { flex-basis: 100%; margin: 4px 0 0; }
+.proof-cell { min-width: 120px; }
+.proof-cell .chips { max-width: 260px; }
+.resume-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.resume-certs { margin-top: 10px; }
+td.evidence { color: var(--muted); max-width: 320px; }
+tr.muted td { color: var(--muted); }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); display: flex; align-items: center;
+  justify-content: center; z-index: 50; padding: 24px; }
+.modal { background: #fff; border-radius: 12px; width: min(960px, 100%); max-height: 100%; display: flex; flex-direction: column;
+  gap: 6px; padding: 14px 16px; box-shadow: 0 20px 50px rgba(0, 0, 0, .25); }
+.modal-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.modal-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.modal-actions a { text-decoration: none; }
+.modal-body { flex: 1; min-height: 300px; display: flex; align-items: center; justify-content: center; background: var(--grey-soft);
+  border-radius: 8px; overflow: auto; }
+.modal-body iframe { width: 100%; height: 65vh; border: 0; background: #fff; }
+.modal-body img { max-width: 100%; max-height: 65vh; object-fit: contain; }
+.modal-foot { border-top: 1px solid var(--line); padding-top: 8px; }
+.modal-foot .review input { width: 280px; }

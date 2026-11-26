@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, Query
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, Query, Response
 
 from ..deps import can_view_employee, current_user, get_db, privileged
-from ..schemas import CertificationIn, SkillIn
+from ..schemas import CertificationIn, FileIn, ResumeApplyIn, SkillIn
 from ..services import employees as svc
+from ..services import resume
 
 router = APIRouter(prefix="/api", tags=["employees"])
 
@@ -54,4 +57,28 @@ def delete_skill(skill_id: str, user=Depends(current_user), conn=Depends(get_db)
 @router.post("/me/certifications")
 def add_cert(body: CertificationIn, user=Depends(current_user), conn=Depends(get_db)):
     return svc.add_certification(conn, user["user_id"], body.name, body.issuer, body.skills, body.issued_on,
-                                 body.valid_till, body.credential_id)
+                                 body.valid_till, body.credential_id, body.proof_filename, body.proof_base64)
+
+
+@router.post("/me/certifications/{cert_id}/proof")
+def attach_proof(cert_id: str, body: FileIn, user=Depends(current_user), conn=Depends(get_db)):
+    return svc.attach_proof(conn, user["user_id"], cert_id, body.filename, body.data_base64)
+
+
+@router.get("/certifications/{cert_id}/proof")
+def open_proof(cert_id: str, user=Depends(current_user), conn=Depends(get_db)):
+    data, media_type, name = svc.get_proof(conn, user, cert_id)
+    return Response(content=data, media_type=media_type, headers={
+        "Content-Disposition": f"inline; filename*=UTF-8''{quote(name)}", "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store"})
+
+
+# ---------------- resume → suggested skills (nothing is saved until /apply)
+@router.post("/me/resume/parse")
+def parse_resume(body: FileIn, user=Depends(current_user), conn=Depends(get_db)):
+    return resume.parse(conn, user["user_id"], body.filename, body.data_base64)
+
+
+@router.post("/me/resume/apply")
+def apply_resume(body: ResumeApplyIn, user=Depends(current_user), conn=Depends(get_db)):
+    return resume.apply(conn, user["user_id"], [i.model_dump() for i in body.items])

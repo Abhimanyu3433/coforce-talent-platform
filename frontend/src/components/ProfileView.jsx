@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
-import { api } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, readFileBase64 } from "../api";
+import { useAuth } from "../auth";
+import ProofViewer from "./ProofViewer";
 import SkillPicker from "./SkillPicker";
 import { Badge, Card, ProfDots, StatusBadge, fmtDate, fmtMonths } from "./ui";
 
@@ -15,7 +17,13 @@ const GROUPS = [
   { key: "biz", label: "Methods & business", test: (s) => ["business", "methodology"].includes(s.type) },
 ];
 
-export default function ProfileView({ p, editable = false, onChanged }) {
+const PROOF_EXTS = [".pdf", ".png", ".jpg", ".jpeg"];
+const PROOF_ACCEPT = ".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg";
+
+export default function ProfileView({ p, editable = false, onChanged, certPrefill }) {
+  const { user } = useAuth() || {};
+  const canSeeProof = editable || user?.app_role === "hr";
+  const [viewing, setViewing] = useState(null);
   const [group, setGroup] = useState("tech");
   const grouped = useMemo(() => Object.fromEntries(GROUPS.map((g) => [g.key, p.skills.filter(g.test)])), [p.skills]);
   const r = p.residency;
@@ -136,20 +144,30 @@ export default function ProfileView({ p, editable = false, onChanged }) {
       <div className="grid-2">
         <Card title={`Certifications (${p.certifications.length})`}>
           <table className="table compact">
-            <thead><tr><th>Certification</th><th>Issued</th><th>Valid till</th><th>Status</th></tr></thead>
+            <thead><tr><th>Certification</th><th>Issued</th><th>Valid till</th><th>Status</th><th>Proof</th></tr></thead>
             <tbody>
               {p.certifications.map((c) => (
                 <tr key={c.cert_id}>
                   <td>{c.name}<div className="muted small">{c.issuer}{c.credential_id ? ` · ${c.credential_id}` : ""}</div></td>
                   <td>{fmtDate(c.issued_on)}</td>
                   <td>{c.valid_till ? fmtDate(c.valid_till) : "No expiry"} {c.expired && <Badge tone="red">expired</Badge>}</td>
-                  <td><Badge tone={CERT_TONE[c.verification_status]}>{c.verification_status}</Badge></td>
+                  <td><Badge tone={CERT_TONE[c.verification_status]}>{c.verification_status}</Badge>
+                    {c.review_note && c.verification_status !== "verified" && <div className="muted small">{c.review_note}</div>}</td>
+                  <td className="proof-cell">
+                    {c.has_proof ? (canSeeProof ? <button className="btn btn-link" onClick={() => setViewing(c)}>View</button>
+                                                : <Badge tone="blue">attached</Badge>)
+                      : c.needs_proof ? <Badge tone="amber">proof needed</Badge>
+                      : <span className="muted small">older record</span>}
+                    {editable && c.verification_status !== "verified" &&
+                      <ProofUpload cert={c} onDone={onChanged} label={c.verification_status === "rejected" ? "Re-submit" : c.has_proof ? "Replace" : "Attach"} />}
+                  </td>
                 </tr>
               ))}
-              {p.certifications.length === 0 && <tr><td colSpan={4} className="muted">None yet</td></tr>}
+              {p.certifications.length === 0 && <tr><td colSpan={5} className="muted">None yet</td></tr>}
             </tbody>
           </table>
-          {editable && <AddCertification onAdded={onChanged} />}
+          {editable && <AddCertification onAdded={onChanged} prefill={certPrefill} />}
+          {viewing && <ProofViewer cert={viewing} onClose={() => setViewing(null)} />}
         </Card>
         <Card title={`Training (${p.trainings.length})`}>
           <table className="table compact">
@@ -210,24 +228,66 @@ function AddSkill({ onAdded }) {
   );
 }
 
-function AddCertification({ onAdded }) {
-  const blank = { name: "", issuer: "", skills: [], issued_on: "", valid_till: "", credential_id: "" };
-  const [f, setF] = useState(blank);
-  const [open, setOpen] = useState(false);
+function ProofUpload({ cert, label, onDone }) {
+  const input = useRef(null);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const [msg, setMsg] = useState(null);
-  if (!open) return <button className="btn btn-ghost" onClick={() => { setOpen(true); setMsg(null); }}>+ Add certification</button>;
-  const submit = async (e) => {
-    e.preventDefault();
-    setErr(null);
+  const pick = async (file) => {
+    if (!file) return;
+    setBusy(true); setErr(null);
     try {
-      await api("/api/me/certifications", { method: "POST", body: { ...f, valid_till: f.valid_till || null, credential_id: f.credential_id || null } });
-      setF(blank); setOpen(false); setMsg("Submitted for HR verification.");
-      onAdded?.();
-    } catch (ex) { setErr(ex.message); }
+      const data_base64 = await readFileBase64(file, { exts: PROOF_EXTS, label: "PDF or image of the certificate" });
+      await api(`/api/me/certifications/${cert.cert_id}/proof`, { method: "POST", body: { filename: file.name, data_base64 } });
+      onDone?.();
+    } catch (ex) { setErr(ex.message); } finally {
+      setBusy(false);
+      if (input.current) input.current.value = "";
+    }
   };
   return (
-    <form className="inline-form" onSubmit={submit}>
+    <>
+      <input ref={input} type="file" hidden accept={PROOF_ACCEPT} onChange={(e) => pick(e.target.files?.[0])} />
+      <button className="btn btn-link" disabled={busy} onClick={() => input.current?.click()}
+              title="Upload the certificate as a PDF or image (max 5 MB)">{busy ? "Uploading…" : label}</button>
+      {err && <div className="error small">{err}</div>}
+    </>
+  );
+}
+
+function AddCertification({ onAdded, prefill }) {
+  const blank = { name: "", issuer: "", skills: [], issued_on: "", valid_till: "", credential_id: "" };
+  const [f, setF] = useState(blank);
+  const [proof, setProof] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const form = useRef(null);
+  useEffect(() => {                                           // "Add with proof" from the resume card
+    if (!prefill) return;
+    setF({ ...blank, name: prefill.name, issuer: prefill.issuer, skills: prefill.skills || [] });
+    setOpen(true); setMsg(null); setErr(null);
+    setTimeout(() => form.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill]);
+  if (!open) return (
+    <>
+      {msg && <div className="ok small">{msg}</div>}
+      <button className="btn btn-ghost" onClick={() => { setOpen(true); setMsg(null); }}>+ Add certification</button>
+    </>);
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(null); setBusy(true);
+    try {
+      const proof_base64 = await readFileBase64(proof, { exts: PROOF_EXTS, label: "PDF or image of the certificate" });
+      await api("/api/me/certifications", { method: "POST", body: {
+        ...f, valid_till: f.valid_till || null, credential_id: f.credential_id || null, proof_filename: proof.name, proof_base64 } });
+      setF(blank); setProof(null); setOpen(false); setMsg("Submitted with proof — HR will verify it.");
+      onAdded?.();
+    } catch (ex) { setErr(ex.message); } finally { setBusy(false); }
+  };
+  return (
+    <form ref={form} className="inline-form" onSubmit={submit}>
       <h4>Add certification</h4>
       <div className="form-grid">
         <label>Name<input required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="SnowPro Core Certification" /></label>
@@ -236,11 +296,14 @@ function AddCertification({ onAdded }) {
         <label>Issued on<input required type="date" value={f.issued_on} onChange={(e) => setF({ ...f, issued_on: e.target.value })} /></label>
         <label>Valid till<input type="date" value={f.valid_till} onChange={(e) => setF({ ...f, valid_till: e.target.value })} /></label>
         <label className="span2">Credential ID<input value={f.credential_id} onChange={(e) => setF({ ...f, credential_id: e.target.value })} /></label>
+        <label className="span2">Proof (certificate PDF or image, max 5 MB)
+          <input required type="file" accept={PROOF_ACCEPT} onChange={(e) => setProof(e.target.files?.[0] || null)} />
+          <span className="muted small">HR compares it with the details above — make sure your name and the credential ID are visible.</span>
+        </label>
       </div>
       {err && <div className="error small">{err}</div>}
-      {msg && <div className="ok small">{msg}</div>}
       <div className="form-row">
-        <button className="btn btn-primary" disabled={!f.skills.length}>Submit for verification</button>
+        <button className="btn btn-primary" disabled={busy || !f.skills.length || !proof}>{busy ? "Uploading…" : "Submit for verification"}</button>
         <button type="button" className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button>
       </div>
     </form>

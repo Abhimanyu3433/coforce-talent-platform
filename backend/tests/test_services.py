@@ -1,4 +1,5 @@
 """Service-layer tests (no web framework needed). Run: cd backend && pytest -q"""
+import base64
 import shutil
 
 import pytest
@@ -107,7 +108,9 @@ def test_cannot_overwrite_project_skill(conn):
 def test_certification_flow(conn):
     emp = "CF100300"
     c = employees.add_certification(conn, emp, "SnowPro Core Certification", "Snowflake", ["snowflake"], "2026-10-01", "2028-10-01", "SNO-1")
-    assert c["verification_status"] == "pending"
+    assert c["verification_status"] == "pending" and c["needs_proof"]
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 64).decode()
+    assert employees.attach_proof(conn, emp, c["cert_id"], "snowpro.png", png)["has_proof"]
     assert any(x["cert_id"] == c["cert_id"] for x in employees.list_certifications(conn, "pending"))
     hr = one(conn, "SELECT user_id FROM users WHERE app_role='hr' LIMIT 1")["user_id"]
     with pytest.raises(Forbidden):

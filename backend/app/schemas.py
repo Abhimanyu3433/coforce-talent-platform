@@ -26,6 +26,23 @@ class CertificationIn(BaseModel):
     issued_on: str
     valid_till: str | None = None
     credential_id: str | None = None
+    proof_filename: str | None = Field(default=None, max_length=255)
+    proof_base64: str | None = Field(default=None, max_length=7_200_000, description="PDF/PNG/JPG, base64, max 5 MB")
+
+
+class FileIn(BaseModel):
+    filename: str | None = Field(default=None, max_length=255)
+    data_base64: str = Field(min_length=10, max_length=7_200_000, description="base64 file content, max 5 MB")
+
+
+class ResumeSkillIn(BaseModel):
+    skill_id: str
+    proficiency: int = Field(ge=1, le=5)
+    years_used: float | None = Field(default=None, ge=0, le=40)
+
+
+class ResumeApplyIn(BaseModel):
+    items: list[ResumeSkillIn] = Field(min_length=1, max_length=200)
 
 
 class CertReviewIn(BaseModel):

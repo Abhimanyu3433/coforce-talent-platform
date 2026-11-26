@@ -1,4 +1,5 @@
 """End-to-end API tests (need fastapi + httpx). Run: cd backend && pytest -q"""
+import base64
 import shutil
 
 import pytest
@@ -161,10 +162,33 @@ def test_employee_permissions_and_self_service(client):
     assert client.get(f"/api/employees/{other}", headers=h).status_code == 403
     r = client.post("/api/me/skills", json={"skill": "langgraph", "proficiency": 2}, headers=h)
     assert r.status_code in (200, 409), r.text
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 64).decode()
     r = client.post("/api/me/certifications", headers=h, json={"name": "SnowPro Core Certification", "issuer": "Snowflake",
-                                                                "skills": ["snowflake"], "issued_on": "2026-09-01"})
+                                                                "skills": ["snowflake"], "issued_on": "2026-09-01",
+                                                                "proof_filename": "snowpro.png", "proof_base64": png})
     assert r.status_code == 200 and r.json()["verification_status"] == "pending"
     cert = r.json()["cert_id"]
     hh, _ = login(client, "hr")
     assert client.post(f"/api/certifications/{cert}/review", json={"approve": True}, headers=hh).json()["verification_status"] == "verified"
     assert client.post(f"/api/certifications/{cert}/review", json={"approve": True}, headers=h).status_code == 403
+    proof = client.get(f"/api/certifications/{cert}/proof", headers=h)
+    assert proof.status_code == 200 and proof.headers["content-type"] == "image/png"
+    assert client.get(f"/api/certifications/{cert}/proof", headers=hh).status_code == 200
+    hl, _ = login(client, "lead")
+    assert client.get(f"/api/certifications/{cert}/proof", headers=hl).status_code == 403
+
+
+def test_resume_upload(client):
+    pytest.importorskip("pypdf")
+    from tests.test_jd_pdf import make_pdf
+    h, user = login(client, "employee")
+    pdf = make_pdf(["Skills: Python (5 years, advanced), dbt, Apache Kafka (basic)"])
+    r = client.post("/api/me/resume/parse", headers=h, json={"filename": "cv.pdf", "data_base64": base64.b64encode(pdf).decode()})
+    assert r.status_code == 200, r.text
+    picks = [s for s in r.json()["skills"] if not s["locked"]]
+    assert picks
+    a = client.post("/api/me/resume/apply", headers=h, json={"items": [
+        {"skill_id": s["skill_id"], "proficiency": s["suggested_level"], "years_used": s["years_used"]} for s in picks]})
+    assert a.status_code == 200 and len(a.json()["added"]) + len(a.json()["updated"]) == len(picks)
+    bad = client.post("/api/me/resume/parse", headers=h, json={"filename": "cv.txt", "data_base64": base64.b64encode(b"plain text here").decode()})
+    assert bad.status_code == 400

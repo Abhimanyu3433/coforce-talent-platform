@@ -1,11 +1,13 @@
 """Talent search, employee 360 profile, self-service skills & certifications, HR verification."""
 from __future__ import annotations
 
+import json
+import re
 from datetime import date, datetime, timezone
 
 from .. import config
 from ..db import one, rows, scalar
-from . import residency
+from . import documents, residency
 from .errors import BadRequest, Conflict, Forbidden, NotFound
 from .skills import get_index
 
@@ -114,11 +116,13 @@ def profile(conn, emp_id: str) -> dict:
     for s in e["skills"]:
         s["verified"] = bool(s["verified"])
     e["certifications"] = rows(conn, """SELECT cert_id, name, issuer, skill_ids, issued_on, valid_till, credential_id,
-                                               verification_status, verified_by, verified_on, review_note
+                                               verification_status, verified_by, verified_on, review_note, created_on,
+                                               proof_file, proof_name, proof_kind, proof_uploaded_on
                                         FROM certifications WHERE emp_id=? ORDER BY issued_on DESC""", (emp_id,))
     today = config.as_of().isoformat()
     for c in e["certifications"]:
         c["expired"] = bool(c["valid_till"] and c["valid_till"] < today)
+        _proof_flags(c)
     e["allocations"] = rows(conn, """SELECT a.allocation_id, a.project_id, p.name project_name, p.project_type,
                                             a.account_id, ac.name account_name, a.role_on_project, a.work_description,
                                             a.skills_used, a.start_date, a.end_date, a.allocation_pct, a.billable,
@@ -185,8 +189,66 @@ def remove_skill(conn, emp_id: str, skill_id: str):
 
 
 # ------------------------------------------------------------------ certifications
+PROOF_KINDS = ("pdf", "png", "jpg")
+
+
+def _proof_flags(c: dict) -> dict:
+    """has_proof / needs_proof for the UI; hides the storage path. App-submitted certificates need proof;
+    certificates from the historical (synthetic) records have none on file and are marked legacy."""
+    c["has_proof"] = bool(c.pop("proof_file", None))
+    c["legacy"] = not c.get("created_on")
+    c["needs_proof"] = not c["has_proof"] and not c["legacy"]
+    if isinstance(c.get("proof_checks"), str):
+        c["proof_checks"] = json.loads(c["proof_checks"])
+    return c
+
+
+def _squash(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", s.lower())
+
+
+def proof_checks(conn, cert: dict, data: bytes, kind: str) -> list[dict]:
+    """Automatic checks HR sees next to the proof: does the file mention the employee, credential ID, title, issuer?"""
+    if kind != "pdf":
+        return [{"check": "Readable text", "ok": None, "detail": "Image file — check the details by eye"}]
+    try:
+        text = documents.extract_text(data, "pdf")["text"]
+    except BadRequest:
+        return [{"check": "Readable text", "ok": None, "detail": "No text in the PDF (scanned) — check the details by eye"}]
+    emp = one(conn, "SELECT first_name, last_name FROM employees WHERE emp_id=?", (cert["emp_id"],))
+    low, flat = text.lower(), _squash(text)
+    out = [{"check": "Employee name", "ok": emp["first_name"].lower() in low and emp["last_name"].lower() in low,
+            "detail": f"{emp['first_name']} {emp['last_name']}"}]
+    if cert.get("credential_id"):
+        out.append({"check": "Credential ID", "ok": _squash(cert["credential_id"]) in flat, "detail": cert["credential_id"]})
+    code = re.search(r"\(([A-Z]{2,5}(?:-\d{3})?)\)\s*$", cert["name"])
+    words = [w for w in re.findall(r"[a-z0-9+#]+", re.sub(r"\([^)]*\)", "", cert["name"].lower()))
+             if len(w) > 2 and w not in {"certified", "certification", "the", "and", "for", "associate"}]
+    hit = sum(1 for w in words if w in low)
+    title_ok = bool(code and _squash(code.group(1)) in flat) or (bool(words) and hit / len(words) >= 0.6)
+    out.append({"check": "Certification title", "ok": title_ok, "detail": cert["name"]})
+    issuer_words = [w for w in re.findall(r"[a-z0-9]+", cert["issuer"].lower()) if len(w) > 2] or [cert["issuer"].lower()]
+    out.append({"check": "Issuer", "ok": any(w in low for w in issuer_words), "detail": cert["issuer"]})
+    return out
+
+
+def _read_proof(filename: str | None, data_base64: str) -> tuple[bytes, str, str]:
+    raw = documents.decode(data_base64)
+    kind = documents.require_kind(raw, PROOF_KINDS, "certificate proof")
+    return raw, kind, documents.safe_name(filename, kind)
+
+
+def _store_proof(conn, cert_id: str, raw: bytes, kind: str, name: str):
+    cert = one(conn, "SELECT * FROM certifications WHERE cert_id=?", (cert_id,))
+    rel = documents.save(conn, f"certs/{cert_id}", name, raw)
+    conn.execute("""UPDATE certifications SET proof_file=?, proof_name=?, proof_kind=?, proof_size=?, proof_uploaded_on=?,
+                    proof_checks=? WHERE cert_id=?""",
+                 (rel, name, kind, len(raw), _now(), json.dumps(proof_checks(conn, cert, raw, kind)), cert_id))
+
+
 def add_certification(conn, emp_id: str, name: str, issuer: str, skills: list[str], issued_on: str,
-                      valid_till: str | None = None, credential_id: str | None = None) -> dict:
+                      valid_till: str | None = None, credential_id: str | None = None,
+                      proof_filename: str | None = None, proof_base64: str | None = None) -> dict:
     if not name.strip() or not issuer.strip():
         raise BadRequest("Certification name and issuer are required")
     try:
@@ -200,6 +262,7 @@ def add_certification(conn, emp_id: str, name: str, issuer: str, skills: list[st
     sk = _resolve_skills(conn, skills)
     if not sk:
         raise BadRequest("Link the certification to at least one skill")
+    proof = _read_proof(proof_filename, proof_base64) if proof_base64 else None    # validate before saving anything
     n = scalar(conn, "SELECT max(CAST(substr(cert_id, 3) AS INTEGER)) FROM certifications") or 0
     cert_id = f"CE{n + 1:06d}"
     conn.execute("""INSERT INTO certifications (cert_id, emp_id, name, issuer, skill_ids, issued_on, valid_till,
@@ -210,8 +273,43 @@ def add_certification(conn, emp_id: str, name: str, issuer: str, skills: list[st
         conn.execute("""INSERT OR IGNORE INTO employee_skills (emp_id, skill_id, proficiency, years_used, first_used,
                         last_used, source, verified, updated_on) VALUES (?,?,2,0,?,?, 'self_declared', 0, ?)""",
                      (emp_id, s["skill_id"], issued_on, issued_on, _now()))
+    if proof:
+        _store_proof(conn, cert_id, *proof)
     conn.commit()
-    return one(conn, "SELECT * FROM certifications WHERE cert_id=?", (cert_id,))
+    return _public_cert(conn, cert_id)
+
+
+def _public_cert(conn, cert_id: str) -> dict:
+    return _proof_flags(one(conn, "SELECT * FROM certifications WHERE cert_id=?", (cert_id,)))
+
+
+def attach_proof(conn, emp_id: str, cert_id: str, filename: str | None, data_base64: str) -> dict:
+    """Attach or replace proof. A rejected certificate goes back to HR as pending."""
+    c = one(conn, "SELECT * FROM certifications WHERE cert_id=?", (cert_id,))
+    if not c or c["emp_id"] != emp_id:
+        raise NotFound("Certification not found on your profile")
+    if c["verification_status"] == "verified":
+        raise Conflict("This certification is already verified")
+    _store_proof(conn, cert_id, *_read_proof(filename, data_base64))
+    if c["verification_status"] == "rejected":
+        conn.execute("""UPDATE certifications SET verification_status='pending', verified_by=NULL, verified_on=NULL,
+                        review_note=? WHERE cert_id=?""", (f"Re-submitted with new proof (was rejected: {c['review_note'] or 'no note'})", cert_id))
+    if not c["created_on"]:
+        conn.execute("UPDATE certifications SET created_on=? WHERE cert_id=?", (_now(), cert_id))
+    conn.commit()
+    return _public_cert(conn, cert_id)
+
+
+def get_proof(conn, user: dict, cert_id: str) -> tuple[bytes, str, str]:
+    """(bytes, media type, file name) — only the certificate's owner and HR can open it."""
+    c = one(conn, "SELECT emp_id, proof_file, proof_name, proof_kind FROM certifications WHERE cert_id=?", (cert_id,))
+    if not c:
+        raise NotFound("Certification not found")
+    if user["user_id"] != c["emp_id"] and user["app_role"] != "hr":
+        raise Forbidden("Only the employee and HR can open certificate proofs")
+    if not c["proof_file"]:
+        raise NotFound("No proof has been uploaded for this certification")
+    return documents.load(conn, c["proof_file"]), documents.KINDS[c["proof_kind"]][0], c["proof_name"]
 
 
 def list_certifications(conn, status: str | None = "pending", ibu_id: str | None = None, limit: int = 200) -> list[dict]:
@@ -222,10 +320,12 @@ def list_certifications(conn, status: str | None = "pending", ibu_id: str | None
         where.append("e.ibu_id=?"); p.append(ibu_id)
     out = rows(conn, f"""SELECT c.*, e.first_name || ' ' || e.last_name emp_name, e.designation, e.ibu_id
                          FROM certifications c JOIN employees e USING(emp_id) WHERE {' AND '.join(where)}
-                         ORDER BY coalesce(c.created_on, c.issued_on) DESC LIMIT ?""", p + [min(int(limit), 1000)])
+                         ORDER BY (c.proof_file IS NULL), coalesce(c.proof_uploaded_on, c.created_on, c.issued_on) DESC
+                         LIMIT ?""", p + [min(int(limit), 1000)])
     idx = get_index(conn)
     for c in out:
         c["skills"] = [idx.get(s)["name"] for s in (c["skill_ids"] or "").split(";") if idx.get(s)]
+        _proof_flags(c)
     return out
 
 
@@ -235,6 +335,12 @@ def review_certification(conn, cert_id: str, reviewer_id: str, approve: bool, no
         raise NotFound("Certification not found")
     if c["emp_id"] == reviewer_id:
         raise Forbidden("You cannot verify your own certification")
+    if c["verification_status"] != "pending":
+        raise Conflict(f"This certification is already {c['verification_status']}")
+    if approve and c["created_on"] and not c["proof_file"]:
+        raise BadRequest("No proof is attached yet. Reject it with a note asking for the certificate, or wait for the upload.")
+    if not approve and not (note or "").strip():
+        raise BadRequest("Add a note saying why it is rejected, so the employee knows what to fix")
     status = "verified" if approve else "rejected"
     conn.execute("""UPDATE certifications SET verification_status=?, verified_by=?, verified_on=?, review_note=?
                     WHERE cert_id=?""", (status, reviewer_id, _now(), note, cert_id))
@@ -252,7 +358,7 @@ def review_certification(conn, cert_id: str, reviewer_id: str, approve: bool, no
                                 source, verified, updated_on) VALUES (?,?,2,0,?,?, 'certification', 1, ?)""",
                              (c["emp_id"], sid, c["issued_on"], c["issued_on"], _now()))
     conn.commit()
-    return one(conn, "SELECT * FROM certifications WHERE cert_id=?", (cert_id,))
+    return _public_cert(conn, cert_id)
 
 
 # ------------------------------------------------------------------ meta

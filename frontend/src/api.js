@@ -41,3 +41,31 @@ export async function api(path, { method = "GET", body, params } = {}) {
   }
   return data;
 }
+
+// Fetch a protected file (e.g. a certificate proof) as a Blob — the JWT can't ride along on a plain <a href>.
+export async function apiBlob(path) {
+  const token = tokenStore.get();
+  const res = await fetch(BASE + path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new ApiError(typeof data?.detail === "string" ? data.detail : res.statusText, res.status, data?.detail);
+  }
+  return res.blob();
+}
+
+export const MAX_UPLOAD_MB = 5;
+
+// Read a chosen file as base64 (without the data: prefix), checking extension and size first.
+export function readFileBase64(file, { exts = [], label = "file" } = {}) {
+  return new Promise((resolve, reject) => {
+    const name = (file?.name || "").toLowerCase();
+    if (!file) return reject(new Error("No file chosen."));
+    if (exts.length && !exts.some((x) => name.endsWith(x))) return reject(new Error(`Please choose a ${label} (${exts.join(", ")}).`));
+    if (file.size > MAX_UPLOAD_MB * 1048576)
+      return reject(new Error(`That file is ${(file.size / 1048576).toFixed(1)} MB — the limit is ${MAX_UPLOAD_MB} MB.`));
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] || "");
+    r.onerror = () => reject(new Error("The file could not be read."));
+    r.readAsDataURL(file);
+  });
+}
