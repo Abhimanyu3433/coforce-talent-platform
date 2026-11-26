@@ -6,6 +6,7 @@ numpy>=1.26
 pandas>=2.2
 pytest>=8.0
 httpx>=0.27
+pypdf>=4.0              # job-description PDF upload in the demand assistant
 # Stage 4 — demand assistant (both optional: the app falls back to the built-in parser / graph runner)
 google-genai>=1.0
 langgraph>=0.2

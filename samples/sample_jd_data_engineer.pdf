@@ -1,0 +1,53 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 840 >>
+stream
+BT /F1 11 Tf 50 780 Td 14 TL
+(JOB DESCRIPTION) Tj T*
+() Tj T*
+(Job Title: Data Engineer) Tj T*
+(Client: Kelium Bank) Tj T*
+(No. of positions: 4) Tj T*
+(Location: Bengaluru or Pune \(Hybrid\). Remote is fine for the right person.) Tj T*
+(Experience: 3-6 years) Tj T*
+(Start date: 5 Jan 2027) Tj T*
+(Duration: 12 months) Tj T*
+() Tj T*
+(About the role) Tj T*
+(We need data engineers to build and look after data pipelines for the bank's payments team.) Tj T*
+(You will move data from many systems into the cloud and make it ready for reports.) Tj T*
+() Tj T*
+(Mandatory skills: Python, SQL, PySpark, Azure Data Factory \(advanced\), Databricks) Tj T*
+(Good to have: Apache Airflow, Power BI, Git) Tj T*
+() Tj T*
+(Other details) Tj T*
+(The client will interview the shortlisted people.) Tj T*
+(Shift: General \(IST\). Priority: High.) Tj T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000001132 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1202
+%%EOF

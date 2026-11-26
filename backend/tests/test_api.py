@@ -137,6 +137,21 @@ def test_upskilling_flow(client):
     assert client.get(f"/api/employees/{me['user_id']}/upskilling", headers=h).status_code == 200
 
 
+def test_jd_pdf_upload(client):
+    pytest.importorskip("pypdf")
+    import base64
+    from tests.test_jd_pdf import JD, make_pdf
+    h, _ = login(client, "lead")
+    sid = client.post("/api/chat/demand/sessions", headers=h).json()["session_id"]
+    r = client.post(f"/api/chat/demand/sessions/{sid}/jd-pdf", headers=h,
+                    json={"filename": "jd.pdf", "data_base64": base64.b64encode(make_pdf(JD)).decode()})
+    assert r.status_code == 200, r.text
+    assert r.json()["draft"]["role_title"] == "Senior Data Engineer"
+    bad = client.post(f"/api/chat/demand/sessions/{sid}/jd-pdf", headers=h,
+                      json={"filename": "x.pdf", "data_base64": base64.b64encode(b"not a pdf at all").decode()})
+    assert bad.status_code == 400
+
+
 def test_employee_permissions_and_self_service(client):
     h, user = login(client, "employee")
     assert client.get("/api/employees", headers=h).status_code == 403

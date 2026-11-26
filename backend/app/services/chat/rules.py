@@ -14,14 +14,15 @@ from ..skills import norm
 MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m} | {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
 NUM_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
              "twelve": 12, "fifteen": 15, "twenty": 20, "a": 1, "an": 1, "single": 1, "couple": 2, "few": 3}
-LEVEL_WORDS = {"expert": 5, "advanced": 4, "strong": 4, "senior": 4, "intermediate": 3, "working": 3, "good": 3,
+LEVEL_WORDS = {"expert": 5, "advanced": 4, "strong": 4, "senior": 4, "intermediate": 3, "working": 3,
                "basic": 2, "beginner": 2, "familiar": 2, "awareness": 1}
 NICE_MARKERS = r"(good[- ]to[- ]have|nice[- ]to[- ]have|preferred|desirable|optional|plus|bonus|added advantage)"
 # synonyms too generic to trust when scanning prose (still fine when typed as an explicit skill)
 SCAN_STOP_KEYS = {"hiring", "recruitment", "rest", "express", "glue", "elastic", "snow", "fabric", "mule", "ba", "agile",
                   "estimation", "client management", "project management", "forecasting", "containers", "lambda", "linux",
                   "excel", "spark core", "spring", "test design", "functional testing", "l&d", "rmg", "resource management"}
-SHORT_SKILL_KEYS = {"s3", "js", "ts", "ml", "dl", "k8s", "adf", "gcp", "aws", "sql", "dbt", "nlp", "rag", "iam", "uat", "lwc", "bdd", "itil"}
+SHORT_SKILL_KEYS = {"s3", "js", "ts", "ml", "dl", "k8s", "adf", "gcp", "aws", "sql", "dbt", "nlp", "rag", "iam", "uat", "lwc", "bdd",
+                    "itil", "git", "jcl"}
 YES = {"yes", "y", "yeah", "yep", "sure", "ok", "okay", "correct", "true", "required", "needed"}
 NO = {"no", "n", "nope", "not required", "not needed", "false"}
 CONFIRM = re.compile(r"^\s*(yes|y|create( it| the demand| demand)?|confirm|submit|go ahead|looks good|lgtm|raise it|done|perfect|ok(ay)?)\W*$", re.I)
@@ -220,6 +221,27 @@ def extract(text: str, asked: str | None, ctx, draft: dict | None = None) -> dic
             p["positions"] = int(cnt)
         # keep going: the same message may also carry locations, skills, dates…
 
+    # --- labelled JD fields ("Job Title: …", "No. of positions: 3", "Client: …") — typical of uploaded JDs
+    for line in raw.splitlines():
+        m = re.match(r"\s*(?:no\.?\s*of\s*(?:positions|openings|resources|vacancies)|openings|positions|vacancies|"
+                     r"headcount|number of (?:positions|openings))\s*[:\-–]\s*(\d+)\b", line, re.I)
+        if m:
+            p["positions"] = int(m.group(1))
+            continue
+        m = re.match(r"\s*(?:job\s*title|position(?:\s*title)?|role(?:\s*title)?|designation|title)\s*[:\-–]\s*(.{3,70})$", line, re.I)
+        if m and not draft.get("role_title") and "role_title" not in p:
+            title = re.split(r"\s*[(\[|,]|\s+-\s+", m.group(1))[0].strip(" .")
+            if title and not re.match(r"^\d+$", title):
+                p["role_title"] = _title(title)
+        m = re.match(r"\s*(?:client|account|customer)\s*(?:name)?\s*[:\-–]\s*(.{2,60})$", line, re.I)
+        if m and "account" not in p:
+            acc, _ = ctx.find_account(m.group(1))
+            if acc:
+                p["account"] = acc["account_id"]
+        m = re.match(r"\s*(?:project(?:\s*name)?)\s*[:\-–]\s*(.{2,80})$", line, re.I)
+        if m:
+            p["project_hint"] = m.group(1).strip()
+
     # --- free text extraction (works for any message, including pasted JDs)
     m = re.search(r"\b(\d+|" + "|".join(NUM_WORDS) + r")\s*(?:x\s+)?(?:nos?\.?\s+)?(?:senior|sr\.?|junior|jr\.?|lead|principal)?\s*"
                   r"[a-z.#/ ]{0,30}?(?:engineers?|developers?|testers?|analysts?|consultants?|architects?|scientists?|"
@@ -278,11 +300,16 @@ def extract(text: str, asked: str | None, ctx, draft: dict | None = None) -> dic
         dt = parse_date(t, ctx.today)
         if dt:
             p["needed_by"] = dt
-    m = re.search(r"\b(?:for|duration( of)?|engagement of|contract of)?\s*(\d+)\s*(months?|mos?|years?|yrs?)\b(?!\s*(?:of\s+)?exp)", t)
-    if m and not re.search(r"experience|exp\b", t[max(0, m.start() - 15): m.end() + 15]) and \
-            (asked == "duration_months" or re.search(r"\b(duration|engagement|contract|for \d+)", t)):
-        n = int(m.group(2))
-        p["duration_months"] = n * 12 if m.group(3).startswith("y") else n
+    if asked == "duration_months" or re.search(r"\b(duration|engagement|contract|tenure|for \d+)", t):
+        for m in re.finditer(r"\b(?:for|duration( of)?|engagement of|contract of)?\s*(\d+)\s*(months?|mos?|years?|yrs?)\b"
+                             r"(?!\s*(?:of\s+)?exp)", t):
+            before = t[max(0, m.start(2) - 25): m.start(2)]
+            after = t[m.end(): m.end() + 15]
+            if re.search(r"\d\s*(?:[-–]|to)\s*$", before) or re.search(r"experience|\bexp\b", before + after):
+                continue                                         # "4-8 years", "5 years of experience" are not durations
+            n = int(m.group(2))
+            p["duration_months"] = n * 12 if m.group(3).startswith("y") else n
+            break
 
     # shift / interview / priority / over-provisioning
     if re.search(r"\b(24x7|24/7|rotational)\b", t):
@@ -293,13 +320,14 @@ def extract(text: str, asked: str | None, ctx, draft: dict | None = None) -> dic
         p["shift"] = "UK Overlap"
     elif re.search(r"\b(general|ist|day shift|normal shift)\b", t):
         p["shift"] = "General (IST)"
-    if re.search(r"\b(client|customer)\s+(interview|round|screening)", t):
-        p["client_interview"] = not re.search(r"\b(no|without|not)\b[^.]{0,20}(client|customer)\s+(interview|round)", t)
-    if re.search(r"\b(high|urgent|critical|p1|top) priority\b|\bpriority\s*(is\s*)?(high|p1)\b|\burgent(ly)?\b", t) or (asked == "priority" and re.search(r"\b(high|urgent|critical)\b", t)):
+    if re.search(r"\b(client|customer)\s+(?:will\s+|would\s+|may\s+|wants\s+to\s+|to\s+)?(?:also\s+)?(interview|round|screening|screen)", t) or \
+            re.search(r"\binterview(?:ed|s)?\s+(?:round\s+)?(?:by|with)\s+(?:the\s+)?(client|customer)", t):
+        p["client_interview"] = not re.search(r"\b(no|without|not|won'?t|will not)\b[^.]{0,25}(interview|round|screening)", t)
+    if re.search(r"\b(high|urgent|critical|p1|top) priority\b|\bpriority\s*[:\-–]?\s*(is\s*)?(high|p1|urgent|critical)\b|\burgent(ly)?\b", t) or (asked == "priority" and re.search(r"\b(high|urgent|critical)\b", t)):
         p["priority"] = "High"
-    elif re.search(r"\blow priority\b|\bpriority\s*(is\s*)?low\b", t) or (asked == "priority" and "low" in t):
+    elif re.search(r"\blow priority\b|\bpriority\s*[:\-–]?\s*(is\s*)?low\b", t) or (asked == "priority" and "low" in t):
         p["priority"] = "Low"
-    elif re.search(r"\b(medium|normal) priority\b|\bpriority\s*(is\s*)?(medium|normal)\b", t) or (asked == "priority" and re.search(r"\b(medium|normal)\b", t)):
+    elif re.search(r"\b(medium|normal) priority\b|\bpriority\s*[:\-–]?\s*(is\s*)?(medium|normal)\b", t) or (asked == "priority" and re.search(r"\b(medium|normal)\b", t)):
         p["priority"] = "Medium"
     m = re.search(r"\b(\d(?:\.\d+)?)\s*(?:x|×|times)\b", t)
     if m and (asked == "overprovision_factor" or re.search(r"over[- ]?provision|shortlist|train", t)):
@@ -315,6 +343,11 @@ def extract(text: str, asked: str | None, ctx, draft: dict | None = None) -> dic
     if ibu and (asked in ("engagement", None) or re.search(r"\b(ibu|vertical|domain|for)\b", t)):
         p["ibu"] = ibu
     proj_account = p.get("account") or draft.get("account_id")
+    if p.get("project_hint") and proj_account:
+        proj, _ = ctx.find_project(p.pop("project_hint"), proj_account)
+        if proj:
+            p["project"] = proj["project_id"]
+    p.pop("project_hint", None)
     if asked == "project" or re.search(r"\b(project|programme|program|PR\d{4})\b", raw, re.I):
         proj, proj_cands = ctx.find_project(raw, proj_account)
         if proj:
@@ -370,7 +403,7 @@ def _level_near(t: str, name: str) -> int | None:
     # only look inside the list item that contains the skill ("Spring Boot (advanced), microservices")
     and_pos = t.rfind(" and ", 0, i)
     start = max(t.rfind(",", 0, i) + 1, t.rfind(";", 0, i) + 1, t.rfind(". ", 0, i) + 1, and_pos + 5 if and_pos != -1 else 0)
-    ends = [x for x in (t.find(",", i), t.find(";", i), t.find(" and ", i), t.find(". ", i)) if x != -1]
+    ends = [x for x in (t.find(",", i), t.find(";", i), t.find(" and ", i), t.find(". ", i), t.find("\n", i)) if x != -1]
     window = t[start: min(ends) if ends else len(t)]
     m = re.search(rf"{re.escape(name)}\s*\(?(?:level|lvl)?\s*([1-5])\b", window)
     if m:

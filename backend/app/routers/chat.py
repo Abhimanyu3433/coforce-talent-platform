@@ -11,6 +11,11 @@ class MessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=6000)
 
 
+class JDFileIn(BaseModel):
+    filename: str = Field(default="job-description.pdf", max_length=255)
+    data_base64: str = Field(min_length=10, max_length=7_200_000, description="The PDF, base64-encoded (max 5 MB)")
+
+
 @router.get("/status")
 def chat_status(user=Depends(privileged)):
     """Which brain answers: Gemini (GEMINI_API_KEY set) or the built-in rule-based parser."""
@@ -42,3 +47,9 @@ def get_session(session_id: str, user=Depends(privileged), conn=Depends(get_db))
 @router.post("/sessions/{session_id}/messages")
 def post_message(session_id: str, body: MessageIn, user=Depends(privileged), conn=Depends(get_db)):
     return service.post(conn, user, session_id, body.text)
+
+
+@router.post("/sessions/{session_id}/jd-pdf")
+def upload_jd_pdf(session_id: str, body: JDFileIn, user=Depends(privileged), conn=Depends(get_db)):
+    """Upload a job-description PDF: its text is read and handled like a pasted JD."""
+    return service.post_jd_pdf(conn, user, session_id, body.filename, body.data_base64)

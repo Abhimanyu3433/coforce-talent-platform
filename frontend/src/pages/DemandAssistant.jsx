@@ -46,6 +46,38 @@ export default function DemandAssistant() {
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [view?.messages.length, sending]);
 
+  const fileInput = useRef(null);
+  const MAX_PDF_MB = 5;
+  const uploadPdf = async (file) => {
+    if (!file || !view || sending) return;
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      setError(new Error("Please choose a PDF file (.pdf)."));
+      return;
+    }
+    if (file.size > MAX_PDF_MB * 1024 * 1024) {
+      setError(new Error(`That PDF is ${(file.size / 1048576).toFixed(1)} MB — the limit is ${MAX_PDF_MB} MB.`));
+      return;
+    }
+    setSending(true); setError(null);
+    setView((v) => ({ ...v, messages: [...v.messages, { role: "user", content: "", attachment: { name: file.name, reading: true }, pending: true }] }));
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(new Error("The file could not be read."));
+        r.readAsDataURL(file);
+      });
+      const data_base64 = String(dataUrl).split(",")[1];
+      setView(await api(`/api/chat/demand/sessions/${view.session_id}/jd-pdf`, { method: "POST", body: { filename: file.name, data_base64 } }));
+    } catch (e) {
+      setError(e);
+      setView((v) => ({ ...v, messages: v.messages.filter((m) => !m.pending) }));
+    } finally {
+      setSending(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
+
   const send = async (msg) => {
     const t = (msg ?? text).trim();
     if (!t || !view || sending) return;
@@ -86,7 +118,7 @@ export default function DemandAssistant() {
       <div className="page-head">
         <div>
           <h1>Demand assistant</h1>
-          <p className="muted">Describe what you need in plain words — or paste a JD. I'll ask for anything missing and check internal supply as we go.</p>
+          <p className="muted">Describe what you need in plain words, paste a JD, or upload a JD as a PDF. I'll ask for anything missing and check internal supply as we go.</p>
         </div>
         <div className="filters-inline">
           {st && <Badge tone={st.mode === "gemini" ? "green" : "grey"} title={st.reason || ""}>
@@ -105,7 +137,17 @@ export default function DemandAssistant() {
           <div className="chat-log">
             {msgs.map((m, i) => (
               <div key={i} className={`msg msg-${m.role} ${m.kind ? "msg-" + m.kind : ""}`}>
-                <div className="bubble"><Rich text={m.content} />
+                <div className="bubble">
+                  {m.attachment ? (
+                    <div className="attachment">
+                      <div><span className="pdf-icon">PDF</span> <b>{m.attachment.name}</b></div>
+                      {m.attachment.reading ? <div className="small">Reading the job description…</div> : (<>
+                        <div className="small">{m.attachment.pages} page{m.attachment.pages > 1 ? "s" : ""} · {m.attachment.chars.toLocaleString("en-IN")} characters
+                          {m.attachment.truncated ? " · long file: the first 15,000 characters were used" : ""}</div>
+                        <details><summary className="small">Show extracted text</summary><div className="extracted"><Rich text={m.content} /></div></details>
+                      </>)}
+                    </div>
+                  ) : <Rich text={m.content} />}
                   {m.kind === "created" && m.demand_id && <Link className="btn btn-primary btn-sm" to={`/demands/${m.demand_id}`}>Open {m.demand_id}</Link>}
                   {m.role === "assistant" && m.source && (
                     <span className={`via ${m.source === "gemini" ? "via-gemini" : m.source.includes("Gemini") ? "via-error" : ""}`}>
@@ -133,7 +175,12 @@ export default function DemandAssistant() {
                       placeholder={view?.phase === "created" ? "This demand is created — start a new chat for another one." : "Type your answer… (Enter to send, Shift+Enter for a new line)"}
                       onChange={(e) => setText(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
-            <button className="btn btn-primary" disabled={sending || !text.trim()}>Send</button>
+            <div className="composer-actions">
+              <input ref={fileInput} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => uploadPdf(e.target.files?.[0])} />
+              <button type="button" className="btn btn-ghost" title="Upload a job description PDF — I'll read it and fill in the demand"
+                      disabled={sending || !view || view.phase === "created"} onClick={() => fileInput.current?.click()}>Upload JD (PDF)</button>
+              <button className="btn btn-primary" disabled={sending || !text.trim()}>Send</button>
+            </div>
           </form>
         </Card>
 

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from ...db import one, rows
 from ..errors import BadRequest, Forbidden, NotFound
-from . import graph, llm, slots
+from . import graph, jd_file, llm, slots
 from .context import ChatContext
 
 
@@ -62,15 +62,15 @@ def start(conn, user: dict) -> dict:
     return view(conn, sid, user)
 
 
-def post(conn, user: dict, sid: str, text: str) -> dict:
+def post(conn, user: dict, sid: str, text: str, meta: dict | None = None, max_chars: int = 6000) -> dict:
     text = (text or "").strip()
     if not text:
         raise BadRequest("Message is empty")
-    if len(text) > 6000:
-        raise BadRequest("Message is too long (max 6000 characters)")
+    if len(text) > max_chars:
+        raise BadRequest(f"Message is too long (max {max_chars} characters)")
     sess = _load(conn, sid, user)
     state = sess["state"]
-    _save_msg(conn, sid, {"role": "user", "content": text})
+    _save_msg(conn, sid, {"role": "user", "content": text, **(meta or {})})
     if state["phase"] == "created":
         reply = {"role": "assistant", "kind": "created", "demand_id": state["demand_id"],
                  "content": f"This chat already created {state['demand_id']}. Start a new chat to raise another demand.",
@@ -87,6 +87,15 @@ def post(conn, user: dict, sid: str, text: str) -> dict:
     _persist(conn, sid, state)
     conn.commit()
     return view(conn, sid, user, new_from=before)
+
+
+def post_jd_pdf(conn, user: dict, sid: str, filename: str, data_base64: str) -> dict:
+    """Read a job-description PDF and treat its text exactly like a pasted JD."""
+    _load(conn, sid, user)                                    # ownership check before doing any work
+    info = jd_file.extract_pdf_text(jd_file.decode_base64(data_base64))
+    name = (filename or "job-description.pdf").replace("\\", "/").split("/")[-1][:120]
+    meta = {"attachment": {"name": name, "pages": info["pages"], "chars": info["chars"], "truncated": info["truncated"]}}
+    return post(conn, user, sid, info["text"], meta=meta, max_chars=jd_file.MAX_CHARS)
 
 
 def view(conn, sid: str, user: dict, new_from: int | None = None) -> dict:
